@@ -49,7 +49,7 @@ public class SeatConfirmationService {
                     .orElseThrow(() -> new MatchNotFoundException(matchId));
 
             if (match.getStatus() != Match.MatchStatus.PLAYING) {
-                SeatConfirmationResponse response = buildClosedResponse(matchId, userId.toString());
+                SeatConfirmationResponse response = buildClosedResponse(matchId, userId);
                 publishConfirmationEvent(userId, matchId, List.of(), null,
                         false, response.getMessage(), startTime);
                 return response;
@@ -57,7 +57,7 @@ public class SeatConfirmationService {
 
             String redisStatus = matchStatusRepository.getMatchStatus(matchId);
             if (!"OPEN".equalsIgnoreCase(redisStatus)) {
-                SeatConfirmationResponse response = buildClosedResponse(matchId, userId.toString());
+                SeatConfirmationResponse response = buildClosedResponse(matchId, userId);
                 publishConfirmationEvent(userId, matchId, List.of(), null,
                         false, response.getMessage(), startTime);
                 return response;
@@ -126,8 +126,8 @@ public class SeatConfirmationService {
                     .message("개인 경기 종료")
                     .userRank(userRank)
                     .confirmedSeats(confirmedSeats)
-                    .matchId("match" + matchId)
-                    .userId(userId.toString())
+                    .matchId(matchId)        // ← Long 타입
+                    .userId(userId)          // ← Long 타입
                     .build();
 
             // 7. 이벤트 발행
@@ -149,6 +149,7 @@ public class SeatConfirmationService {
 
     /**
      * Redis에서 해당 유저가 선점한 좌석 조회
+     * @return seatId 목록 (형식: "8-9-15")
      */
     private List<String> findUserSeats(Long matchId, Long userId) {
         List<String> userSeats = new ArrayList<>();
@@ -164,7 +165,7 @@ public class SeatConfirmationService {
                     if (parts.length == 2) {
                         Long ownerId = Long.valueOf(parts[0]);
                         if (ownerId.equals(userId)) {
-                            // key 형식: seat:100:008:9-15 -> seatId: 008-9-15
+                            // key 형식: seat:100:8:9-15 -> seatId: 8-9-15
                             String seatId = extractSeatIdFromKey(key);
                             userSeats.add(seatId);
                         }
@@ -178,12 +179,12 @@ public class SeatConfirmationService {
 
     /**
      * Redis 키에서 seatId 추출
-     * 예: "seat:100:008:9-15" -> "008-9-15"
+     * 예: "seat:100:8:9-15" -> "8-9-15"
      */
     private String extractSeatIdFromKey(String key) {
         String[] parts = key.split(":");
         if (parts.length >= 4) {
-            return parts[2] + "-" + parts[3];
+            return parts[2] + "-" + parts[3];  // sectionId-row-col
         }
         return "";
     }
@@ -214,7 +215,7 @@ public class SeatConfirmationService {
 
     /**
      * seatId에서 sectionId 추출
-     * 예: "008-9-15" -> "008"
+     * 예: "8-9-15" -> "8"
      */
     private String extractSection(String seatId) {
         String[] parts = seatId.split("-");
@@ -249,11 +250,12 @@ public class SeatConfirmationService {
                 .build();
     }
 
-    private SeatConfirmationResponse buildClosedResponse(Long matchId, String userId) {
+    private SeatConfirmationResponse buildClosedResponse(Long matchId, Long userId) {
         return SeatConfirmationResponse.builder()
                 .success(false)
                 .message("이 이벤트는 더 이상 예매할 수 없습니다.")
-                .matchId("match" + matchId)
+                .matchId(matchId)      // ← Long 타입
+                .userId(userId)        // ← Long 타입
                 .status("CLOSED")
                 .build();
     }
