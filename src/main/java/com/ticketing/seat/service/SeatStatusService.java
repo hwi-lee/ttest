@@ -2,11 +2,11 @@ package com.ticketing.seat.service;
 
 import com.ticketing.seat.dto.SeatStatusDto;
 import com.ticketing.seat.dto.SeatStatusResponse;
-import com.ticketing.seat.entity.Match;
+import com.ticketing.entity.Match;
 import com.ticketing.seat.exception.MatchClosedException;
 import com.ticketing.seat.exception.MatchNotFoundException;
 import com.ticketing.seat.redis.MatchStatusRepository;
-import com.ticketing.seat.repository.MatchRepository;
+import com.ticketing.repository.MatchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
