@@ -1,6 +1,7 @@
 package com.tickget.roomserver.domain.entity;
 
 import com.tickget.roomserver.domain.enums.HallSize;
+import com.tickget.roomserver.domain.enums.HallType;
 import com.tickget.roomserver.domain.enums.RoomStatus;
 import com.tickget.roomserver.domain.enums.RoomType;
 import com.tickget.roomserver.domain.enums.ThumbnailType;
@@ -28,6 +29,8 @@ import org.hibernate.annotations.ColumnDefault;
 @Builder
 @Table(name = "rooms")
 public class Room extends BaseTimeEntity{
+
+    static final String TSX_DEFAULT ="default";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -70,18 +73,22 @@ public class Room extends BaseTimeEntity{
     @Column(name = "thumbnail_value", length = 500)
     private String thumbnailValue;
 
-    public static Room of (CreateRoomRequest createRoomRequest,PresetHall hall, String thumbnailValue ) {
+    @Column(name = "tsx_url", length = 500)
+    private String tsxUrl;
+
+    public static Room of (CreateRoomRequest createRoomRequest,PresetHall hall ) {
         return Room.builder()
                 .roomType(createRoomRequest.getRoomType())
                 .hallId(createRoomRequest.getHallId())
                 .hallSize(hall.getSize())
                 .hallName(hall.getName())
-                .isAIGenerated(false)
+                .isAIGenerated(createRoomRequest.getHallType() == HallType.AI_GENERATED)
                 .botCount(createRoomRequest.getBotCount())
                 .totalSeat(createRoomRequest.getTotalSeat())
                 .status(RoomStatus.WAITING)
                 .thumbnailType(createRoomRequest.getThumbnailType())
-                .thumbnailValue(thumbnailValue)
+                .thumbnailValue(createRoomRequest.getThumbnailValue())
+                .tsxUrl(createRoomRequest.getTsxUrl()==null?TSX_DEFAULT:createRoomRequest.getTsxUrl())
                 .build();
     }
 

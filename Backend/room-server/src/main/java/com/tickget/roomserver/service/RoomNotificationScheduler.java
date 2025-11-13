@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.tickget.roomserver.domain.repository.RoomCacheRepository;
 import com.tickget.roomserver.dto.cache.QueueStatus;
 import com.tickget.roomserver.dto.cache.RoomMember;
-import com.tickget.roomserver.kafaka.RoomEventMessage;
+import com.tickget.roomserver.kafka.RoomEventMessage;
 import com.tickget.roomserver.session.WebSocketSessionManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -102,6 +102,7 @@ public class RoomNotificationScheduler {
             Long matchId = roomCacheRepository.getMatchIdByRoomId(roomId);
 
             if (matchId == null) {
+                stopScheduling(roomId);
                 log.debug("방 {}의 매치 ID를 찾을 수 없음 (매치 생성 전일 수 있음)", roomId);
                 return;
             }
@@ -111,6 +112,7 @@ public class RoomNotificationScheduler {
 
             if (allMembers.isEmpty()) {
                 log.debug("방 {}에 멤버가 없음", roomId);
+                stopScheduling(roomId);
                 return;
             }
 

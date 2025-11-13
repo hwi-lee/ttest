@@ -12,6 +12,7 @@ import com.ticketing.seat.redis.MatchStatusRepository;
 import com.ticketing.repository.MatchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +27,7 @@ import java.util.List;
 public class SeatReservationService {
 
     private static final int MAX_SEATS_PER_REQUEST = 2;
+    private final StringRedisTemplate redisTemplate;
 
     private final MatchRepository matchRepository;
     private final MatchStatusRepository matchStatusRepository;
@@ -43,7 +45,8 @@ public class SeatReservationService {
         }
 
         // 1-1. totalSeats 필수 검증
-        if (req.getTotalSeats() == null || req.getTotalSeats() <= 0) {
+        // *bot인 경우 확인 로직 skip
+        if (req.getUserId() > 0 && (req.getTotalSeats() == null || req.getTotalSeats() <= 0)) {
             throw new IllegalArgumentException("Total seats must be provided and greater than 0");
         }
 
@@ -65,13 +68,15 @@ public class SeatReservationService {
         }
 
         // 3-1. 프론트에서 받은 totalSeats를 DB에 저장
-        if (!match.getMaxUser().equals(req.getTotalSeats())) {
-            log.info("totalSeats 업데이트: matchId={}, 기존값={}, 새로운값={}",
-                    matchId, match.getMaxUser(), req.getTotalSeats());
-            match.setMaxUser(req.getTotalSeats());
-            match.setUpdatedAt(LocalDateTime.now());
-            matchRepository.save(match);
-        }
+        // *bot인 경우 확인 로직 skip
+        // 기존에 받아오는 것으로 로직 변경
+//        if (req.getUserId() > 0 && !match.getMaxUser().equals(req.getTotalSeats())) {
+//            log.info("totalSeats 업데이트: matchId={}, 기존값={}, 새로운값={}",
+//                    matchId, match.getMaxUser(), req.getTotalSeats());
+//            match.setMaxUser(req.getTotalSeats());
+//            match.setUpdatedAt(LocalDateTime.now());
+//            matchRepository.save(match);
+//        }
 
         // 4. SeatInfo -> rowNumber, grade 변환
         String sectionId = req.extractSectionId();  // Long → String 변환 (Redis 키용)
@@ -91,7 +96,7 @@ public class SeatReservationService {
                 rowNumbers,
                 userId,
                 grades,     // 각 좌석의 grade 리스트
-                req.getTotalSeats()
+                match.getTotalSeats()
         );
 
         // 6. 결과 처리
