@@ -65,6 +65,7 @@ public class CaptchaController {
         Long userId = Long.valueOf(request.getHeader("X-User-Id"));
 
         if(userId < 0){
+
             return ResponseEntity.status(HttpStatus.OK)
                     .body(Map.of("message","isRobot"));
         }

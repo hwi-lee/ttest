@@ -22,7 +22,6 @@ public class JoinRoomResponse {
     private List<RoomMember> roomMembers ; // id:name
     private RoomStatus roomStatus;
     private String subscriptionTopic;
-    private String tsxUrl;
 
     public static JoinRoomResponse of (Room room, int currentUserCount , List<RoomMember> roomMembers, Long matchId) {
 
@@ -33,7 +32,6 @@ public class JoinRoomResponse {
                 .subscriptionTopic("/topic/rooms/" + room.getId())
                 .roomMembers(roomMembers)
                 .roomStatus(room.getStatus())
-                .tsxUrl(room.getTsxUrl())
                 .build();
 
     }

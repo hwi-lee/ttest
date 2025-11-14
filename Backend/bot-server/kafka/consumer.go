@@ -12,17 +12,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// BotDequeuedEvent Kafka에서 수신하는 봇 대기열 이탈 이벤트
-type BotDequeuedEvent struct {
-	RoomID  int64 `json:"roomId"`
-	MatchID int64 `json:"matchId"`
-	UserID  int64 `json:"userId"`
-	Ts      int64 `json:"ts"`
+// MatchStartEvent Kafka에서 수신하는 매치 시작 이벤트
+type MatchStartEvent struct {
+	MatchID int64  `json:"matchId"`
+	EventID string `json:"eventId"`
 }
 
 // MatchService 인터페이스 (순환 import 방지)
 type MatchService interface {
-	SignalBotStart(matchID int64, userID int64)
+	SignalMatchStart(matchID int64)
 }
 
 // Consumer Kafka Consumer
@@ -100,21 +98,20 @@ func (h *consumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
 		)
 
 		// 이벤트 파싱
-		var event BotDequeuedEvent
+		var event MatchStartEvent
 		if err := json.Unmarshal(message.Value, &event); err != nil {
 			h.logger.Error("이벤트 파싱 실패", zap.Error(err), zap.String("message", string(message.Value)))
 			session.MarkMessage(message, "")
 			continue
 		}
 
-		h.logger.Info("봇 대기열 이탈 이벤트 수신",
+		h.logger.Info("매치 시작 이벤트 수신",
 			zap.Int64("match_id", event.MatchID),
-			zap.Int64("user_id", event.UserID),
-			zap.Int64("ts", event.Ts),
+			zap.String("event_id", event.EventID),
 		)
 
-		// 매치 서비스에 개별 봇 시작 신호 전달
-		h.matchService.SignalBotStart(event.MatchID, event.UserID)
+		// 매치 서비스에 신호 전달
+		h.matchService.SignalMatchStart(event.MatchID)
 
 		// 오프셋 커밋
 		session.MarkMessage(message, "")
