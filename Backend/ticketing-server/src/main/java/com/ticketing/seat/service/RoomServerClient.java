@@ -9,6 +9,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Map;
+
 /**
  * 룸 서버와 HTTP 통신을 담당하는 클라이언트 서비스
  */
@@ -89,6 +91,43 @@ public class RoomServerClient {
 
         } catch (Exception e) {
             log.error("룸 서버 방 정보 조회 중 오류 발생: roomId={}, error={}", roomId, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    // RoomServerClient.java
+
+    /**
+     * Room의 전체 좌석 수 조회
+     * GET /rooms/{roomId}/totalSeat
+     *
+     * @param roomId 방 ID
+     * @return 전체 좌석 수 (null이면 실패)
+     */
+    public Integer getTotalSeats(Long roomId) {
+        String url = roomServerUrl + "/rooms/" + roomId + "/totalSeat";
+
+        try {
+            log.info("룸 서버에서 전체 좌석 수 조회: roomId={}, url={}", roomId, url);
+
+            ResponseEntity<Integer> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    null,
+                    Integer.class  //  Integer로 직접 받음
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                Integer totalSeats = response.getBody();
+                log.info("룸 서버 전체 좌석 수 조회 성공: roomId={}, totalSeats={}", roomId, totalSeats);
+                return totalSeats;
+            }
+
+            log.warn("룸 서버 전체 좌석 수 조회 실패: roomId={}, status={}", roomId, response.getStatusCode());
+            return null;
+
+        } catch (Exception e) {
+            log.error("룸 서버 전체 좌석 수 조회 중 오류 발생: roomId={}, error={}", roomId, e.getMessage(), e);
             return null;
         }
     }

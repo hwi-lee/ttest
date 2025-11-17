@@ -1,7 +1,6 @@
 package com.ticketing.seat.service;
 
 import com.ticketing.entity.Match;
-import com.ticketing.entity.UserStats;
 import com.ticketing.repository.MatchRepository;
 import com.ticketing.repository.UserStatsRepository;
 import com.ticketing.seat.concurrency.LuaCancelExecutor;
@@ -22,13 +21,15 @@ import java.util.Set;
  *
  * 유저가 경기 중에 방을 나갔을 때 3가지 케이스:
  * 1. Hold 안 함: humanusers만 감소
- * 2. Hold만 함: 좌석 취소 + reserved_count 감소 + humanusers 감소
+ * 2. Hold만 함: 좌석 취소 + humanusers 감소
  * 3. Confirm 완료: 아무것도 안 함 (이미 처리 완료)
  *
  * 판단 순서:
- * 1) DB user_stats 확인 (Confirm 여부) → 있으면 종료
- * 2) Redis 좌석 키 확인 (Hold 여부) → 있으면 취소 + humanusers 감소
- * 3) 둘 다 없으면 → humanusers만 감소
+ * 1) 봇인지 확인 → 봇이면 처리 안 함
+ * 2) Redis에서 room:{roomId}:match:* 패턴으로 matchId 추출
+ * 3) DB user_stats 확인 (Confirm 여부) → 있으면 종료
+ * 4) Redis 좌석 키 확인 (Hold 여부) → 있으면 취소 + humanusers 감소
+ * 5) 둘 다 없으면 → humanusers만 감소
  */
 @Slf4j
 @Service
@@ -45,7 +46,7 @@ public class UserLeftRoomService {
         log.info("경기 중 유저 퇴장 처리 시작: roomId={}, userId={}", roomId, userId);
 
         try {
-            // 0. 봇인 경우 처리하지 않음
+            // ===== 케이스 0: 봇인 경우 처리하지 않음 =====
             boolean isBot = userId < 0;
             if (isBot) {
                 log.info("봇 유저는 퇴장 처리하지 않음: userId={}", userId);
@@ -59,16 +60,24 @@ public class UserLeftRoomService {
                         .build();
             }
 
-            // 1. DB에서 roomId로 가장 최근 매치 조회
-            /// //////////////
-            Match match = matchRepository.findTopByRoomIdOrderByCreatedAtDesc(roomId).orElse(null);
+            // 1. Redis에서 room:{roomId}:match:* 패턴으로 matchId 추출
+            Long matchId = getMatchIdFromRoomPattern(roomId);
+
+            if (matchId == null) {
+                log.warn("Redis에서 매치 매핑을 찾을 수 없음: roomId={}", roomId);
+                return buildErrorResponse("해당 방의 진행 중인 매치를 찾을 수 없습니다.", roomId, userId);
+            }
+
+            log.info("roomId-matchId 매핑 조회 완료: roomId={}, matchId={}", roomId, matchId);
+
+            // 2. DB에서 매치 정보 조회
+            Match match = matchRepository.findById(matchId).orElse(null);
 
             if (match == null) {
-                log.warn("매치를 찾을 수 없음: roomId={}", roomId);
+                log.warn("DB에서 매치를 찾을 수 없음: matchId={}", matchId);
                 return buildErrorResponse("매치를 찾을 수 없습니다.", roomId, userId);
             }
 
-            Long matchId = match.getMatchId();
             log.info("매치 조회 완료: matchId={}, status={}", matchId, match.getStatus());
 
             // 3. 매치가 이미 종료되었으면 처리하지 않음
@@ -84,7 +93,7 @@ public class UserLeftRoomService {
                         .build();
             }
 
-            // 4. DB user_stats 확인 (Confirm 완료 여부)
+            // ===== 케이스 3: DB user_stats 확인 (Confirm 완료 여부) =====
             boolean hasConfirmed = userStatsRepository.existsByUserIdAndMatchId(userId, matchId);
 
             if (hasConfirmed) {
@@ -99,9 +108,8 @@ public class UserLeftRoomService {
                         .build();
             }
 
-            // 5. Redis 좌석 키 확인 (Hold 여부)
+            // ===== 케이스 2 & 1: Redis 좌석 키 확인 (Hold 여부) =====
             List<SeatInfo> userSeats = findUserSeatsInfo(matchId, userId);
-            //
 
             if (!userSeats.isEmpty()) {
                 // 케이스 2: Hold 했지만 Confirm 안 함 → 좌석 취소 + humanusers 감소
@@ -138,9 +146,52 @@ public class UserLeftRoomService {
     }
 
     /**
-     * Redis에서 roomId로 matchId 조회
+     * Redis에서 room:{roomId}:match:* 패턴으로 matchId 추출
+     *
      * 키 패턴: room:{roomId}:match:{matchId}
+     * 예시: room:1001:match:5001 → matchId = 5001
+     *
+     * @param roomId 방 ID
+     * @return matchId (없으면 null)
      */
+    private Long getMatchIdFromRoomPattern(Long roomId) {
+        try {
+            String pattern = "room:" + roomId + ":match:*";
+            Set<String> keys = redisTemplate.keys(pattern);
+
+            if (keys == null || keys.isEmpty()) {
+                log.warn("Redis에서 roomId-matchId 매핑을 찾을 수 없음: roomId={}, pattern={}",
+                        roomId, pattern);
+                return null;
+            }
+
+            // 첫 번째 매칭된 키에서 matchId 추출
+            String key = keys.iterator().next();
+
+            // 키 형식: room:{roomId}:match:{matchId}
+            // 마지막 토큰이 matchId
+            String[] parts = key.split(":");
+            if (parts.length >= 4) {
+                String matchIdStr = parts[3];
+                Long matchId = Long.parseLong(matchIdStr);
+
+                log.debug("Redis 키 패턴 매칭 성공: roomId={}, key={}, matchId={}",
+                        roomId, key, matchId);
+
+                return matchId;
+            }
+
+            log.warn("Redis 키 형식이 올바르지 않음: roomId={}, key={}", roomId, key);
+            return null;
+
+        } catch (NumberFormatException e) {
+            log.error("matchId 파싱 실패: roomId={}, error={}", roomId, e.getMessage());
+            return null;
+        } catch (Exception e) {
+            log.error("Redis에서 matchId 조회 중 오류: roomId={}, error={}", roomId, e.getMessage(), e);
+            return null;
+        }
+    }
 
     /**
      * humanusers:match:{matchId} 카운터 감소
@@ -162,11 +213,13 @@ public class UserLeftRoomService {
 
     /**
      * 유저의 선점 좌석을 섹션별로 원자적 취소 + humanusers 감소
+     *
+     * 주의: 좌석 취소 시 reserved_count는 변경하지 않음
+     * (Hold만 한 상태이므로 reserved_count에 포함되지 않음)
      */
     private UserLeftRoomResponse cancelUserSeatsAndDecreaseHumanUsers(Long matchId, Long userId,
                                                                       List<SeatInfo> userSeats, Match match) {
         int totalCancelledSeats = 0;
-        boolean statusChangedToOpen = false;
 
         // 섹션별로 그룹화
         var seatsBySection = userSeats.stream()
@@ -185,6 +238,7 @@ public class UserLeftRoomService {
                     sectionId, matchId, userId, rowNumbers);
 
             // Lua 스크립트로 원자적 취소
+            // 주의: totalSeats는 사용되지 않음 (reserved_count 변경 안 함)
             Long result = luaCancelExecutor.tryCancelSeatsAtomically(
                     matchId,
                     String.valueOf(sectionId),
@@ -195,11 +249,8 @@ public class UserLeftRoomService {
 
             if (result != null && result > 0L) {
                 totalCancelledSeats += seatsInSection.size();
-
-                if (result == 2L) {
-                    statusChangedToOpen = true;
-                    log.info("만석 상태가 OPEN으로 복구됨: matchId={}", matchId);
-                }
+                log.info("좌석 취소 성공: matchId={}, userId={}, sectionId={}, count={}",
+                        matchId, userId, sectionId, seatsInSection.size());
             } else {
                 log.warn("좌석 취소 실패: matchId={}, userId={}, sectionId={}",
                         matchId, userId, sectionId);
@@ -209,8 +260,8 @@ public class UserLeftRoomService {
         // 좌석 취소 후 humanusers 감소
         decreaseHumanUsers(matchId, userId);
 
-        log.info("유저 퇴장 처리 완료: matchId={}, userId={}, cancelledSeats={}, statusChanged={}",
-                matchId, userId, totalCancelledSeats, statusChangedToOpen);
+        log.info("유저 퇴장 처리 완료: matchId={}, userId={}, cancelledSeats={}",
+                matchId, userId, totalCancelledSeats);
 
         return UserLeftRoomResponse.builder()
                 .success(true)
@@ -218,7 +269,7 @@ public class UserLeftRoomService {
                 .matchId(matchId)
                 .userId(userId)
                 .cancelledSeatCount(totalCancelledSeats)
-                .statusChangedToOpen(statusChangedToOpen)
+                .statusChangedToOpen(false)
                 .build();
     }
 
