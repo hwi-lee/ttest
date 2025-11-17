@@ -10,6 +10,4 @@ public enum EventType {
     ROOM_PLAYING_ENDED,
     QUEUE_STATUS_UPDATE,
     USER_DEQUEUED,
-    FORCE_DISCONNECT,
-    MATCH_ENDED
 }

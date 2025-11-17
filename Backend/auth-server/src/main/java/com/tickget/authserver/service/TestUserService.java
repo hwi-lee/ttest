@@ -25,7 +25,6 @@ public class TestUserService {
     private final UserRepository userRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenService tokenService;
-    private final ProfileImageService profileImageService;
 
     /**
      * 테스트 유저 생성 및 로그인
@@ -42,7 +41,7 @@ public class TestUserService {
         String nickname = generateUniqueNickname(uniqueId);
         String name = generateUniqueName(uniqueId);
 
-        // 1. 테스트 유저 생성 (프로필 이미지는 null)
+        // 테스트 유저 생성
         User testUser = User.builder()
                 .email(email)
                 .nickname(nickname)
@@ -51,24 +50,13 @@ public class TestUserService {
                 .birthDate(LocalDate.of(2000, 1, 1))  // 기본 생년월일
                 .address("Test Address")
                 .phone("010-0000-0000")
-                .profileImageUrl(null)  // 일단 null로 저장
+                .profileImageUrl(null)
                 .build();
 
-        // 2. DB에 저장하여 ID 생성
+        // DB에 저장
         User savedUser = userRepository.save(testUser);
         log.info("테스트 유저 생성 완료: id={}, email={}, nickname={}, name={}",
                 savedUser.getId(), savedUser.getEmail(), savedUser.getNickname(), savedUser.getName());
-
-        // 3. 기본 프로필 이미지를 S3에 업로드
-        try {
-            String s3ProfileUrl = profileImageService.copyRandomDefaultProfileImage(savedUser.getId());
-            savedUser.setProfileImageUrl(s3ProfileUrl);
-            savedUser = userRepository.save(savedUser);
-            log.info("기본 프로필 이미지 설정 완료 - userId: {}, url: {}", savedUser.getId(), s3ProfileUrl);
-        } catch (Exception e) {
-            log.error("기본 프로필 이미지 업로드 실패 - userId: {}, error: {}", savedUser.getId(), e.getMessage());
-            // 프로필 이미지 업로드 실패 시에도 사용자 생성은 계속 진행 (null로 유지)
-        }
 
         // JWT 토큰 생성
         String accessToken = jwtTokenProvider.createAccessToken(savedUser.getId(), savedUser.getEmail());

@@ -7,24 +7,20 @@ import com.tickget.roomserver.domain.enums.ThumbnailType;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
-import lombok.NoArgsConstructor;
 import lombok.Getter;
 
 @Getter
 @AllArgsConstructor
-@NoArgsConstructor
 public class CreateRoomRequest {
 
     private Long userId;
     private String username;
-    private String profileImageUrl;
 
     private String matchName;
 
     private RoomType roomType;
 
     private Long hallId;
-    private String hallName;
     private HallType hallType;
     private Difficulty difficulty;
 
@@ -38,5 +34,4 @@ public class CreateRoomRequest {
 
     private ThumbnailType thumbnailType;
     private String thumbnailValue;
-    private String tsxUrl;
 }

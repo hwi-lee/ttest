@@ -27,9 +27,10 @@ public class QueueConsumer {
     private final ObjectMapper mapper;
 
     // 주기 설정
-    private static final int CONSUME_RATE_PER_2S = 500;  // 2초당 최대 소비자 수
-    private static final int EMIT_MS = 1_000;             // Kafka 발행 틱 (20ms)
-    private static final int COMMIT_MS = 2_000;          // Redis 상태 커밋 주기 (2s)
+    private static final int CONSUME_RATE_PER_2S = 1;  // 2초당 최대 소비자 수
+    private static final int EMIT_MS = 1000;             // Kafka 발행 틱 (20ms)
+    private static final int COMMIT_MS = 10_000;          // Redis 상태 커밋 주기 (2s)
+
     private static final String STATE = "state";
     private static final String DEQUEUED = "DEQUEUED";
     private static final Duration STATE_TTL = Duration.ofSeconds(3);
@@ -78,55 +79,40 @@ public class QueueConsumer {
             redis.opsForValue().increment(QueueKeys.roomOffset(matchId), popped.size());
 
             for (ZSetOperations.TypedTuple<String> t : popped) {
-                String userIdString = t.getValue();
-                if (userIdString == null) continue;
+                String userId = t.getValue();
+                if (userId == null) continue;
 
-                String roomIdString = redis.opsForValue().get("match:" + matchId + ":room");
-                if (roomIdString == null) {
-                    log.warn("⚠️ roomIdString이 null입니다. matchId={}", matchId);
-                    continue;
-                }
-                Long roomIdLong = Long.valueOf(roomIdString);
-                Long userIdLong = Long.valueOf(userIdString);
+                Long userIdLong = Long.valueOf(userId);
                 // 1) 카프카 즉시 발행 (Kafka의 batch/linger가 자연스런 배칭 담당)
                 Map<String, Object> payload = Map.of(
-                        "roomId", roomIdLong,
                         "matchId", matchId,
-                        "userId", userIdLong,
+                        "userId", userId,
                         "ts", System.currentTimeMillis()
                 );
                 try {
                     // 사용자일 경우 보내는 대기열을 빠져나갔다는 Kafka 이벤트 발행
                     if(userIdLong>0){
-                        log.info("유저{}가 대기열을 빠져나감",userIdLong);
                         kafkaTemplate.send(
-                                        KafkaTopic.USER_DEQUEUED.getTopicName(),
-                                        userIdString, // key: userId → 파티션 분산/순서 보장 용도
-                                        payload // JSON 형태 그대로, 직렬화할 필요 없음.
-                                )
-                                .whenComplete( (result, ex) -> {
-                                    if (ex != null || result == null) {
-                                        log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userIdString, ex);
-                                    }
-                                /*
-                                else{
-                                    log.info(" roomId{}, matchId:{}, userId{} 사용자가 정상적으로 빠져나갔습니다.",roomIdLong, matchId, userIdLong);
-                                }
-                                */
-                                });
+                                KafkaTopic.USER_DEQUEUED.getTopicName(),
+                                userId, // key: userId → 파티션 분산/순서 보장 용도
+                                payload // JSON 형태 그대로, 직렬화할 필요 없음.
+                        )
+                        .whenComplete( (result, ex) -> {
+                            if (ex != null || result == null) {
+                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userId, ex);
+                            }
+                        });
                     }
                     // 봇일 경우 보내는 대기열을 빠져나갔다는 Kafka 이벤트 발행
                     else if(userIdLong<0){
                         kafkaTemplate.send(
                                 KafkaTopic.BOT_DEQUEUED.getTopicName(),
-                                userIdString, // key: userId → 파티션 분산/순서 보장 용도
+                                userId, // key: userId → 파티션 분산/순서 보장 용도
                                 payload // JSON 형태 그대로, 직렬화할 필요 없음.
                         ).whenComplete( (result, ex) -> {
                             if (ex != null || result == null) {
-                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userIdString, ex);
-                            }/*else{
-                                    log.info(" roomId{}, matchId:{}, userId{} 봇이 정상적으로 빠져나갔습니다.",roomIdLong, matchId, userIdLong);
-                                }*/
+                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userId, ex);
+                            }
                         });
                     }
 
@@ -134,13 +120,13 @@ public class QueueConsumer {
                 } catch (Exception e) {
                     // 실패 시: 재시도 정책/보상 트랜잭션은 설계에 따라
                     // 간단 복구: 다시 대기열로 밀어 넣기 (score는 지금 시각)
-                    zset.add(zsetKey, userIdString, (double) System.currentTimeMillis());
+                    zset.add(zsetKey, userId, (double) System.currentTimeMillis());
                     continue;
                 }
 
                 // 2) 이번 윈도우 버킷에 커밋 대기표시(사용자 목록 적재)
                 //    2초 커밋 시점에만 실제 state=DEQUEUED, TTL부여
-                redis.opsForList().rightPush(windowListKey(matchId, bucket), userIdString);
+                redis.opsForList().rightPush(windowListKey(matchId, bucket), userId);
             }
 
             // 잔여 대기열 크기 기록은 2초 커밋 시점에서 한번에 맞추는 것을 권장

@@ -34,9 +34,6 @@ public class Match {
     @Column(name = "used_bot_count", nullable = false)
     private Integer usedBotCount;
 
-    @Column(name = "total_seats", nullable = false)
-    private Integer totalSeats;
-
     @Column(name = "started_at", nullable = false)
     private LocalDateTime startedAt;
 
