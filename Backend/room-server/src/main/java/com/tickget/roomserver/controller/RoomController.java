@@ -11,6 +11,7 @@ import com.tickget.roomserver.dto.response.JoinRoomResponse;
 import com.tickget.roomserver.dto.response.RoomDetailResponse;
 import com.tickget.roomserver.dto.response.RoomResponse;
 import com.tickget.roomserver.service.RoomService;
+import jakarta.persistence.criteria.CriteriaBuilder.In;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
@@ -27,9 +28,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
 @RestController
@@ -62,9 +61,8 @@ public class RoomController {
 
     // 방생성
     @PostMapping
-    public ResponseEntity<CreateRoomResponse> createRoom(@RequestBody CreateRoomRequest createRoomRequest,
-                                                         @RequestPart(value = "file", required = false) MultipartFile thumbnail) throws JsonProcessingException {
-        CreateRoomResponse response = roomService.createRoom(createRoomRequest,thumbnail);
+    public ResponseEntity<CreateRoomResponse> createRoom(@RequestBody CreateRoomRequest createRoomRequest) throws JsonProcessingException {
+        CreateRoomResponse response = roomService.createRoom(createRoomRequest);
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(response);
@@ -109,6 +107,13 @@ public class RoomController {
         ExitRoomResponse exitRoomResponse = roomService.exitRoom(exitRoomResuest, roomId);
         return ResponseEntity.ok()
                 .body(exitRoomResponse);
+    }
+
+    @GetMapping("/{roomId}/totalSeat")
+    public ResponseEntity<Integer> getTotalSeat(@PathVariable("roomId") Long roomId){
+       Integer totalSeat =  roomService.getTotalSeat(roomId);
+
+       return ResponseEntity.ok().body(totalSeat);
     }
 
 

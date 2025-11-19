@@ -1,7 +1,9 @@
 package com.ticketing.queue.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ticketing.KafkaTopic;
 import com.ticketing.queue.DTO.MatchInsertedEventDTO;
+import com.ticketing.queue.DTO.QueueLogDTO;
 import com.ticketing.queue.DTO.request.MatchRequestDTO;
 import com.ticketing.queue.DTO.response.MatchIdResponseDTO;
 import com.ticketing.queue.DTO.QueueDTO;
@@ -17,6 +19,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -122,8 +125,15 @@ public class QueueService {
         /**
          * DLT 처리가 필요할까?
          * */
-        // QueueLogDTO logDto = QueueLogDTO.of(randomUUID, matchId, playerType, userId, status, positionAhead, positionBehind, total, userInfo.getClickMiss(), userInfo.getDuration(), LocalDateTime.now());
-        // SendResult<String, Object> recordData = kafkaTemplate.send(KafkaTopic.USER_LOG_QUEUE.getTopicName(), userId, logDto).get();
+        QueueLogDTO logDto = QueueLogDTO.of(randomUUID, matchId, playerType, userId, status, positionAhead, positionBehind, total, userInfo.getClickMiss(), userInfo.getDuration(), LocalDateTime.now());
+        try{
+            SendResult<String, Object> recordData = kafkaTemplate.send(KafkaTopic.USER_LOG_QUEUE.getTopicName(), userId, logDto).get();
+            // log.info("Kafka: 사용자 Log 적재 이벤트 발행");
+
+        }catch(Exception e){
+            e.printStackTrace();
+        }
+
 
         return queueInfo;
     }
@@ -138,18 +148,20 @@ public class QueueService {
     // 정해진 KafkaTopic에 시작했다는 사실을 발행한다.
     // Websocket으로 받는다.
     @Transactional
-    public MatchResponseDTO insertMatchData(MatchRequestDTO dto){
+    public MatchResponseDTO startMatch(MatchRequestDTO dto){
         try{
             Match match = new Match();
             match.setRoomId(dto.getRoomId());
             match.setMatchName(dto.getMatchName());
             match.setMaxUser(dto.getMaxUserCount());
             match.setUsedBotCount(dto.getBotCount());
+            //match.setTotalSeats(dto.getTotalSeats());
             match.setDifficulty(dto.getDifficulty());
             match.setStartedAt(dto.getStartedAt());
             match.setCreatedAt(LocalDateTime.now());
             match.setUpdatedAt(LocalDateTime.now());
             match.setStatus(Match.MatchStatus.WAITING);
+            match.setTimeLimitSeconds(MATCH_EXPIRE_TIME * 60);
 
             Match saved = matchRepository.save(match);
 
@@ -177,10 +189,13 @@ public class QueueService {
             // 2) roomId에 대한 matchId를 Redis 키로 설정
             // DB에서 해당 matchId에 대한 roomId 조회
             Match MATCH = matchRepository.findById(matchId).orElseThrow();
-            String key = "room:%s:match:%s".formatted(MATCH.getRoomId(), MATCH.getMatchId());
+            String roomKey = "room:%s:match:%s".formatted(MATCH.getRoomId(), MATCH.getMatchId());
+            String matchKey = "match:%s:room".formatted(MATCH.getMatchId());
 
-            redis.opsForValue().set(key,"1");
-            redis.expire(key, Duration.ofMinutes(MATCH_EXPIRE_TIME));
+            redis.opsForValue().set(roomKey,"1");
+            redis.opsForValue().set(matchKey, String.valueOf(MATCH.getRoomId()));
+            redis.expire(roomKey, Duration.ofMinutes(MATCH_EXPIRE_TIME));
+            redis.expire(matchKey, Duration.ofMinutes(MATCH_EXPIRE_TIME));
 
             // 3) 스케줄링을 통한, 시작 시간 N초 전 Thread 실행
             // Transactional로 DB, Playing Status, 매치 참여 인원 Redis 키 설정.

@@ -5,6 +5,7 @@ import com.ticketing.KafkaTopic;
 import com.ticketing.queue.domain.enums.QueueKeys;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.StringRedisConnection;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -26,17 +27,31 @@ public class QueueConsumer {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ObjectMapper mapper;
 
-    // 주기 설정
-    private static final int CONSUME_RATE_PER_2S = 1;  // 2초당 최대 소비자 수
-    private static final int EMIT_MS = 1000;             // Kafka 발행 틱 (20ms)
-    private static final int COMMIT_MS = 10_000;          // Redis 상태 커밋 주기 (2s)
+    public static int CONSUME_RATE_PER_2S;
+    public static int EMIT_MS;
+    public static int COMMIT_MS;
+
+    @Value("${consume-rate.per-second}")
+    public void setConsumeRatePerSecond(int v) {
+        CONSUME_RATE_PER_2S = v;
+    }
+    @Value("${consume-rate.kafka-emit}")
+    public void setEmitMs(int v) {
+        EMIT_MS = v;
+    }
+    @Value("${consume-rate.redis-emit}")
+    public void setCommitMs(int v) {
+        COMMIT_MS = v;
+    }
 
     private static final String STATE = "state";
     private static final String DEQUEUED = "DEQUEUED";
     private static final Duration STATE_TTL = Duration.ofSeconds(3);
 
     // 틱당 소비량 = 2초 총량을 틱 수로 나눔 (200 / (2000/20) = 2)
-    private static final int PER_TICK = Math.max(1, CONSUME_RATE_PER_2S * EMIT_MS / COMMIT_MS);
+    private static int getPerTick() {
+        return Math.max(1, CONSUME_RATE_PER_2S * EMIT_MS / COMMIT_MS);
+    }
 
     // 대규모 방 대비 배치 사이즈
     private static final int BATCH_SIZE = 1000;
@@ -57,7 +72,7 @@ public class QueueConsumer {
         return "q:" + matchId + ":window:" + bucket;
     }
 
-    @Scheduled(fixedRate = EMIT_MS) // 빠른 주기: 카프카 발행
+    @Scheduled(fixedRateString = "${consume-rate.kafka-emit}") // 빠른 주기: 카프카 발행
     public void emitTick() {
         ZSetOperations<String, String> zset = redis.opsForZSet();
         Set<String> roomKeys = redis.keys("queue:*:waiting");
@@ -72,47 +87,61 @@ public class QueueConsumer {
             try { matchId = Long.parseLong(matchIdStr); } catch (Exception e) { continue; }
 
             // 이번 틱에서 뺄 개수
-            Set<ZSetOperations.TypedTuple<String>> popped = zset.popMin(zsetKey, PER_TICK);
+            Set<ZSetOperations.TypedTuple<String>> popped = zset.popMin(zsetKey, getPerTick());
             if (popped == null || popped.isEmpty()) continue;
 
             // 방별 통계 갱신을 위해 카운트 누적 (2초 커밋 때 반영)
             redis.opsForValue().increment(QueueKeys.roomOffset(matchId), popped.size());
 
             for (ZSetOperations.TypedTuple<String> t : popped) {
-                String userId = t.getValue();
-                if (userId == null) continue;
+                String userIdString = t.getValue();
+                if (userIdString == null) continue;
 
-                Long userIdLong = Long.valueOf(userId);
+                String roomIdString = redis.opsForValue().get("match:" + matchId + ":room");
+                if (roomIdString == null) {
+                    log.warn("⚠️ roomIdString이 null입니다. matchId={}", matchId);
+                    continue;
+                }
+                Long roomIdLong = Long.valueOf(roomIdString);
+                Long userIdLong = Long.valueOf(userIdString);
                 // 1) 카프카 즉시 발행 (Kafka의 batch/linger가 자연스런 배칭 담당)
                 Map<String, Object> payload = Map.of(
+                        "roomId", roomIdLong,
                         "matchId", matchId,
-                        "userId", userId,
+                        "userId", userIdLong,
                         "ts", System.currentTimeMillis()
                 );
                 try {
                     // 사용자일 경우 보내는 대기열을 빠져나갔다는 Kafka 이벤트 발행
                     if(userIdLong>0){
                         kafkaTemplate.send(
-                                KafkaTopic.USER_DEQUEUED.getTopicName(),
-                                userId, // key: userId → 파티션 분산/순서 보장 용도
-                                payload // JSON 형태 그대로, 직렬화할 필요 없음.
-                        )
-                        .whenComplete( (result, ex) -> {
-                            if (ex != null || result == null) {
-                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userId, ex);
-                            }
-                        });
+                                        KafkaTopic.USER_DEQUEUED.getTopicName(),
+                                        userIdString, // key: userId → 파티션 분산/순서 보장 용도
+                                        payload // JSON 형태 그대로, 직렬화할 필요 없음.
+                                )
+                                .whenComplete( (result, ex) -> {
+                                    if (ex != null || result == null) {
+                                        log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userIdString, ex);
+                                    }
+                                /**
+                                else{
+                                    log.info("KAFKA roomId{}, matchId:{}, userId{} 사용자가 정상적으로 빠져나갔습니다.",roomIdLong, matchId, userIdLong);
+                                }
+                                 */
+                                });
                     }
                     // 봇일 경우 보내는 대기열을 빠져나갔다는 Kafka 이벤트 발행
                     else if(userIdLong<0){
                         kafkaTemplate.send(
                                 KafkaTopic.BOT_DEQUEUED.getTopicName(),
-                                userId, // key: userId → 파티션 분산/순서 보장 용도
+                                userIdString, // key: userId → 파티션 분산/순서 보장 용도
                                 payload // JSON 형태 그대로, 직렬화할 필요 없음.
                         ).whenComplete( (result, ex) -> {
                             if (ex != null || result == null) {
-                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userId, ex);
-                            }
+                                log.error("❌ Kafka 발행 실패: topic={} key={}", KafkaTopic.USER_DEQUEUED.getTopicName(), userIdString, ex);
+                            }/*else{
+                                    log.info(" roomId{}, matchId:{}, userId{} 봇이 정상적으로 빠져나갔습니다.",roomIdLong, matchId, userIdLong);
+                                }*/
                         });
                     }
 
@@ -120,13 +149,13 @@ public class QueueConsumer {
                 } catch (Exception e) {
                     // 실패 시: 재시도 정책/보상 트랜잭션은 설계에 따라
                     // 간단 복구: 다시 대기열로 밀어 넣기 (score는 지금 시각)
-                    zset.add(zsetKey, userId, (double) System.currentTimeMillis());
+                    zset.add(zsetKey, userIdString, (double) System.currentTimeMillis());
                     continue;
                 }
 
                 // 2) 이번 윈도우 버킷에 커밋 대기표시(사용자 목록 적재)
                 //    2초 커밋 시점에만 실제 state=DEQUEUED, TTL부여
-                redis.opsForList().rightPush(windowListKey(matchId, bucket), userId);
+                redis.opsForList().rightPush(windowListKey(matchId, bucket), userIdString);
             }
 
             // 잔여 대기열 크기 기록은 2초 커밋 시점에서 한번에 맞추는 것을 권장
@@ -134,7 +163,7 @@ public class QueueConsumer {
     }
 
     // 2초마다 사용자에 대한 Redis 키 업데이트
-    @Scheduled(fixedRate = COMMIT_MS, initialDelay = 0) // 2초마다 커밋
+    @Scheduled(fixedRateString = "${consume-rate.redis-emit}", initialDelay = 0) // 2초마다 커밋
     public void commitWindow() {
         long bucket = previousBucket(); // 직전 윈도우를 커밋
         // 방 키를 한 번 더 긁어, 각 방의 버킷리스트를 처리
@@ -181,7 +210,7 @@ public class QueueConsumer {
     }
 
     // 2초마다 사용자에 대한 Redis 키 업데이트
-    @Scheduled(fixedRate = COMMIT_MS, initialDelay = DELAY_DIFF)
+    @Scheduled(fixedRateString = "${consume-rate.redis-emit}", initialDelay = DELAY_DIFF)
     public void updatePositions() {
         ZSetOperations<String, String> zset = redis.opsForZSet();
         Set<String> roomKeys = redis.keys("queue:*:waiting");

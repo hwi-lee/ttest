@@ -1,18 +1,28 @@
 package com.ticketing.queue.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ticketing.KafkaTopic;
 import com.ticketing.entity.Match;
-import com.ticketing.repository.MatchCacheRepository;
+import com.ticketing.queue.domain.enums.QueueKeys;
 import com.ticketing.repository.MatchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.StringRedisConnection;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -67,7 +77,7 @@ public class MatchStatusChanger {
             redis.opsForValue().set(userNumKey, userNumString);
             redis.expire(userNumKey, Duration.ofMinutes(EXPIRE_MINUTES));
 
-            log.info("현재 사용자의 수 {}", userNum);
+            log.info("방ID : {}, 매치ID : {}, 사용자 수 : {}", roomId, matchId, userNum);
         }else{
             log.info("사용자 수를 못 가져왔습니다.");
         }
@@ -85,6 +95,5 @@ public class MatchStatusChanger {
 
 
     }
-
 
 }

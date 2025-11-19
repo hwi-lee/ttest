@@ -5,12 +5,14 @@ import com.ticketing.seat.dto.SeatConfirmationRequest;
 import com.ticketing.seat.dto.SeatConfirmationResponse;
 import com.ticketing.entity.Match;
 import com.ticketing.entity.UserStats;
+import com.ticketing.seat.event.MatchEndEvent;
 import com.ticketing.seat.exception.MatchNotFoundException;
 import com.ticketing.seat.redis.MatchStatusRepository;
 import com.ticketing.repository.MatchRepository;
 import com.ticketing.repository.UserStatsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @Service
@@ -33,6 +36,7 @@ public class SeatConfirmationService {
     private final StringRedisTemplate redisTemplate;
     private final RoomServerClient roomServerClient;
     private final StatsServerClient statsServerClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public SeatConfirmationResponse confirmSeats(Long matchId, SeatConfirmationRequest request) {
@@ -145,6 +149,7 @@ public class SeatConfirmationService {
                                         .build())
                                 .toList()
                 )
+                .totalRank(-1)
                 .matchId(matchId)
                 .userId(userId)
                 .build();
@@ -291,6 +296,7 @@ public class SeatConfirmationService {
                 .success(true)
                 .message("개인 경기 종료")
                 .userRank(userRank)
+                .totalRank(totalRank)
                 .confirmedSeats(confirmedSeats)
                 .matchId(matchId)
                 .userId(userId)
@@ -322,11 +328,26 @@ public class SeatConfirmationService {
             redisTemplate.expire(statusKey, Duration.ofSeconds(1800));
 
             // 4. Redis 정리
-            cleanupAllMatchRedis(matchId);
+            //  cleanupAllMatchRedis(matchId);
+
+            // 5. 이벤트 발행 (트랜잭션 커밋 후 실행됨)
+         //   eventPublisher.publishEvent(new MatchEndEvent(matchId, match.getRoomId()));
+
+//            // 트랜잭션 커밋될 시간을 주기 위해 비동기로 처리
+//            CompletableFuture.runAsync(() -> {
+//                try {
+//                    Thread.sleep(2500);  // 500ms 대기
+//                    statsServerClient.notifyMatchEnd(matchId);
+//                } catch (Exception e) {
+//                    log.error("매치 종료 알림 실패: matchId={}", matchId, e);
+//                }
+//            });
+
 
             // 5. 외부 서버 알림
-            statsServerClient.notifyMatchEnd(matchId);
+           // statsServerClient.notifyMatchEnd(matchId);
             roomServerClient.notifyMatchEnd(match.getRoomId());
+            statsServerClient.notifyMatchEnd(matchId);
 
             log.info(" 경기 종료 처리 완료: matchId={}", matchId);
             log.info("ℹ 미확정 유저는 클라이언트에서 FailedStatsController API 호출 필요");

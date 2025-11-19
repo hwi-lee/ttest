@@ -2,6 +2,7 @@ package com.tickget.roomserver.dto.response;
 
 import com.tickget.roomserver.domain.entity.Room;
 import com.tickget.roomserver.domain.enums.HallSize;
+import com.tickget.roomserver.domain.enums.HallType;
 import com.tickget.roomserver.domain.enums.RoomStatus;
 import com.tickget.roomserver.domain.enums.RoomType;
 import com.tickget.roomserver.domain.enums.ThumbnailType;
@@ -22,6 +23,7 @@ public class RoomResponse {
 
     private Long roomId;
     private String roomName;
+    private Long hostId;
     private int botCount;
     private int maxUserCount;
 
@@ -34,6 +36,7 @@ public class RoomResponse {
     private LocalDateTime startTime;
 
     private HallSize hallSize;
+    private HallType hallType;
     private String hallName;
     private int totalSeat;
 
@@ -50,6 +53,7 @@ public class RoomResponse {
         return RoomResponse.builder()
                 .roomId(room.getId())
                 .roomName(roomInfo.getTitle())
+                .hostId(roomInfo.getHostId())
                 .botCount(room.getBotCount())
                 .maxUserCount(roomInfo.getMaxUserCount())
                 .currentUserCount(roomInfo.getCurrentUserCount())
@@ -59,6 +63,7 @@ public class RoomResponse {
                 .createdAt(TimeConverter.toLocalDateTime(roomInfo.getCreatedAt()))
                 .startTime(startTime)
                 .hallSize(room.getHallSize())
+                .hallType(room.isAIGenerated() ? HallType.AI_GENERATED : HallType.PRESET)
                 .hallName(room.getHallName())
                 .totalSeat(room.getTotalSeat())
                 .thumbnailType(room.getThumbnailType())

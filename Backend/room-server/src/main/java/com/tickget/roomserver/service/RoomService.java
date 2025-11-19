@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.tickget.roomserver.domain.entity.PresetHall;
 import com.tickget.roomserver.domain.entity.Room;
 import com.tickget.roomserver.domain.enums.RoomStatus;
-import com.tickget.roomserver.domain.enums.ThumbnailType;
 import com.tickget.roomserver.domain.repository.PresetHallRepository;
 import com.tickget.roomserver.domain.repository.RoomCacheRepository;
 import com.tickget.roomserver.domain.repository.RoomRepository;
@@ -36,7 +35,8 @@ import com.tickget.roomserver.exception.RoomClosedException;
 import com.tickget.roomserver.exception.RoomFullException;
 import com.tickget.roomserver.exception.RoomNotFoundException;
 import com.tickget.roomserver.exception.RoomPlayingException;
-import com.tickget.roomserver.kafaka.RoomEventProducer;
+import com.tickget.roomserver.kafka.RoomEventProducer;
+import com.tickget.roomserver.session.SessionInfo;
 import com.tickget.roomserver.session.WebSocketSessionManager;
 
 import java.util.*;
@@ -47,15 +47,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class RoomService {
 
-
-    private final MinioService minioService;
     private final TicketingServiceClient  ticketingServiceClient;
     private final WebSocketSessionManager sessionManager;
     private final RoomEventProducer roomEventProducer;
@@ -64,27 +61,22 @@ public class RoomService {
     private final PresetHallRepository  presetHallRepository;
 
     @Transactional
-    public CreateRoomResponse createRoom(CreateRoomRequest request, MultipartFile thumbnail) throws JsonProcessingException {
+    public CreateRoomResponse createRoom(CreateRoomRequest request ) throws JsonProcessingException {
 
         log.info("사용자  {}(id:{})(이)가 방 생성 요청",request.getUsername(), request.getUserId());
         
         PresetHall presetHall = presetHallRepository.findById(request.getHallId()).orElseThrow(
                 () -> new PresetHallNotFoundException(request.getHallId()));
 
-        String thumbnailValue = request.getThumbnailValue();
-        if (request.getThumbnailType() == ThumbnailType.UPLOADED) {
-            thumbnailValue = minioService.uploadFile(thumbnail);
-
-        }
-
-        Room room = Room.of(request,presetHall,thumbnailValue);
+        Room room = Room.of(request,presetHall);
         room = roomRepository.save(room); // 알아서 id값 반영되지만 명시
-        String sessionId = sessionManager.getSessionIdByUserId(request.getUserId());
+        SessionInfo sessionInfo = sessionManager.getByUserId(request.getUserId());
+        String sessionId = sessionInfo != null ? sessionInfo.getSessionId() : null;
 
         try {
             // Redis에 정보 저장
             roomCacheRepository.saveRoom(room.getId(), request);
-            roomCacheRepository.addMemberToRoom(room.getId(), request.getUserId(), request.getUsername());
+            roomCacheRepository.addMemberToRoom(room.getId(), request.getUserId(), request.getUsername(), request.getProfileImageUrl());
 
             // 세션에 방 정보 등록
             if (sessionId != null) {
@@ -173,24 +165,26 @@ public class RoomService {
 
 
 
-        int currentUserCount = roomCacheRepository.addMemberToRoom(roomId, userId, userName);
+        int currentUserCount = roomCacheRepository.addMemberToRoom(roomId, userId, userName, joinRoomRequest.getProfileImageUrl());
 
-        String sessionId = sessionManager.getSessionIdByUserId(userId);
+        SessionInfo sessionInfo = sessionManager.getByUserId(joinRoomRequest.getUserId());
+        String sessionId = sessionInfo != null ? sessionInfo.getSessionId() : null;
         if (sessionId != null) {
             sessionManager.joinRoom(sessionId, roomId);
         }
 
         List<RoomMember> roomMembers = roomCacheRepository.getRoomMembers(roomId);
         Long matchId = roomCacheRepository.getMatchIdByRoomId(roomId);
+        RoomInfo roomInfo = roomCacheRepository.getRoomInfo(roomId);
+        Long hostId = roomInfo.getHostId();
+
 
         log.info("사용자  {}(id:{})(이)가 방 {}(매치 {} 대기 중)에 입장 성공 - 현재 인원: {}",userName, userId, roomId,matchId, currentUserCount);
 
         UserJoinedRoomEvent event = UserJoinedRoomEvent.of(userId,userName, roomId, currentUserCount);
         roomEventProducer.publishUserJoinedEvent(event);
 
-
-
-        return JoinRoomResponse.of(room, currentUserCount, roomMembers,matchId);
+        return JoinRoomResponse.of(room, currentUserCount, roomMembers,matchId,hostId);
 
     }
 
@@ -239,7 +233,8 @@ public class RoomService {
         }
 
 
-        String sessionId = sessionManager.getSessionIdByUserId(userId);
+        SessionInfo sessionInfo = sessionManager.getByUserId(exitRoomRequest.getUserId());
+        String sessionId = sessionInfo != null ? sessionInfo.getSessionId() : null;
         if (sessionId != null) {
             sessionManager.leaveRoom(sessionId);
         }
@@ -288,7 +283,8 @@ public class RoomService {
         Room room = roomRepository.findById(roomId).orElseThrow(
                 () -> new RoomNotFoundException(roomId));
 
-        room.setStatus(RoomStatus.WAITING);
+        room.setStatus(RoomStatus.CLOSED);
+        roomCacheRepository.deleteRoom(roomId);
         roomEventProducer.publishRoomPlayingEndedEvent(RoomPlayingEndedEvent.builder().roomId(roomId).build());
         log.debug("방 {}에서 매치 종료. status를 {} 로 변경", roomId, room.getStatus());
     }
@@ -311,5 +307,14 @@ public class RoomService {
             log.error("매치 설정 변경 이벤트 처리 중 오류: 방={}, error={}",
                     request.getRoomId(), e.getMessage(), e);
         }
+    }
+
+    public Integer getTotalSeat(Long roomId) {
+        log.debug("방의 총 좌석수 반환: 방 ={}",roomId);
+
+        Room room = roomRepository.findById(roomId).orElseThrow(
+                () -> new RoomNotFoundException(roomId));
+
+        return room.getTotalSeat();
     }
 }
